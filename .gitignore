@@ -30,3 +30,4 @@ tmp_fixcheck/
 semi-utils/
 *.spec.bak
 *.log
+.mimocode/
