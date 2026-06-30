@@ -3,11 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
-import rawpy
 from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont
+
+if TYPE_CHECKING:
+    import rawpy
 
 TEMPLATES = (
     "logo-stamp",
@@ -134,7 +136,7 @@ class ManualExif:
 
 @dataclass(frozen=True)
 class RestorationSettings:
-    fbdd: rawpy.FBDDNoiseReductionMode
+    fbdd: str
     median_filter_passes: int
     noise_thr: float | None
     post_median_size: int
@@ -182,7 +184,7 @@ class SuperResolutionAnalysis:
 
 RESTORATION_SETTINGS = {
     "detail": RestorationSettings(
-        fbdd=rawpy.FBDDNoiseReductionMode.Light,
+        fbdd="Light",
         median_filter_passes=0,
         noise_thr=None,
         post_median_size=0,
@@ -196,7 +198,7 @@ RESTORATION_SETTINGS = {
         backprojection_passes=1,
     ),
     "balanced": RestorationSettings(
-        fbdd=rawpy.FBDDNoiseReductionMode.Light,
+        fbdd="Light",
         median_filter_passes=0,
         noise_thr=2.0,
         post_median_size=0,
@@ -210,7 +212,7 @@ RESTORATION_SETTINGS = {
         backprojection_passes=2,
     ),
     "clean": RestorationSettings(
-        fbdd=rawpy.FBDDNoiseReductionMode.Full,
+        fbdd="Full",
         median_filter_passes=1,
         noise_thr=4.0,
         post_median_size=3,
@@ -755,17 +757,30 @@ def get_restoration_settings(profile: str) -> RestorationSettings:
         raise ValueError(f"Unsupported restoration profile: {profile}") from exc
 
 
+def import_rawpy():
+    try:
+        import rawpy
+    except ImportError as exc:
+        raise RuntimeError(
+            "rawpy is required to decode DNG files. Install project dependencies "
+            "with `pip install -e .` before processing photos."
+        ) from exc
+    return rawpy
+
+
 def load_image(path: Path, settings: RestorationSettings) -> np.ndarray:
     if path.suffix.lower() != ".dng":
         raise ValueError("Only .DNG input files are supported.")
 
+    rawpy = import_rawpy()
+    fbdd_noise_reduction = getattr(rawpy.FBDDNoiseReductionMode, settings.fbdd)
     with rawpy.imread(str(path)) as raw:
         rgb = raw.postprocess(
             use_camera_wb=True,
             no_auto_bright=True,
             demosaic_algorithm=rawpy.DemosaicAlgorithm.AHD,
             highlight_mode=rawpy.HighlightMode.Blend,
-            fbdd_noise_reduction=settings.fbdd,
+            fbdd_noise_reduction=fbdd_noise_reduction,
             median_filter_passes=settings.median_filter_passes,
             noise_thr=settings.noise_thr,
             output_bps=16,

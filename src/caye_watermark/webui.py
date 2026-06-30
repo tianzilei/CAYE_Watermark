@@ -3,8 +3,8 @@ from __future__ import annotations
 import shutil
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import gradio as gr
 from PIL import Image
 
 from caye_watermark._logo import find_default_logo
@@ -15,6 +15,20 @@ from caye_watermark.pipeline import (
     ProcessingOptions,
     process_image,
 )
+
+if TYPE_CHECKING:
+    import gradio as gr
+
+
+def import_gradio():
+    try:
+        import gradio as gr
+    except ImportError as exc:
+        raise RuntimeError(
+            "gradio is required to launch the Web UI. Install project dependencies "
+            "with `pip install -e .` before starting caye-watermark-web."
+        ) from exc
+    return gr
 
 
 def build_options(
@@ -64,7 +78,23 @@ def build_options(
 def _validate_options(options: ProcessingOptions) -> str | None:
     if options.enable_watermark and options.watermark_image is None:
         return "Error: A logo is required when watermark is enabled. Upload a logo or disable watermark."
+    if not 0.0 < options.watermark_scale <= 1.0:
+        return "Error: Watermark scale must be between 0 and 1.0."
+    if not 0 <= options.opacity <= 255:
+        return "Error: Watermark opacity must be between 0 and 255."
     return None
+
+
+def _validate_dng_file(dng_file) -> Path | str:
+    if dng_file is None:
+        return "Please upload a DNG file."
+
+    input_path = Path(dng_file)
+    if input_path.suffix.lower() != ".dng":
+        return "Error: Only .DNG input files are supported."
+    if not input_path.is_file():
+        return f"Error: Input file does not exist: {input_path}"
+    return input_path
 
 
 def run_preview(
@@ -84,10 +114,11 @@ def run_preview(
     iso,
     captured_at,
 ):
-    if dng_file is None:
-        return None, "Please upload a DNG file."
+    input_path_or_error = _validate_dng_file(dng_file)
+    if isinstance(input_path_or_error, str):
+        return None, input_path_or_error
 
-    input_path = Path(dng_file)
+    input_path = input_path_or_error
     options = build_options(
         template, logo, upscale_factor, restoration_profile,
         watermark_scale, opacity, no_watermark,
@@ -104,16 +135,16 @@ def run_preview(
     def reporter(stage: str, message: str) -> None:
         messages.append(f"[{stage}] {message}")
 
-    output_path = Path(tempfile.mktemp(suffix=".png"))
     try:
-        process_image(input_path, output_path, options, reporter=reporter)
-        preview_img = Image.open(output_path)
-        status = "\n".join(messages)
-        return preview_img, status
+        with tempfile.TemporaryDirectory(prefix="caye_preview_") as tmpdir:
+            output_path = Path(tmpdir) / "preview.png"
+            process_image(input_path, output_path, options, reporter=reporter)
+            with Image.open(output_path) as handle:
+                preview_img = handle.copy()
+            status = "\n".join(messages)
+            return preview_img, status
     except Exception as exc:
         return None, f"Error: {exc}"
-    finally:
-        output_path.unlink(missing_ok=True)
 
 
 def run_export(
@@ -133,10 +164,11 @@ def run_export(
     iso,
     captured_at,
 ):
-    if dng_file is None:
-        return None, "Please upload a DNG file."
+    input_path_or_error = _validate_dng_file(dng_file)
+    if isinstance(input_path_or_error, str):
+        return None, input_path_or_error
 
-    input_path = Path(dng_file)
+    input_path = input_path_or_error
     options = build_options(
         template, logo, upscale_factor, restoration_profile,
         watermark_scale, opacity, no_watermark,
@@ -166,11 +198,13 @@ def run_export(
 
 
 def create_ui() -> gr.Blocks:
+    gr = import_gradio()
     with gr.Blocks(title="CAYE Watermark") as app:
         gr.Markdown("# CAYE Watermark")
 
-        with gr.Row():
-            with gr.Column(scale=1):
+        with gr.Group():
+            gr.Markdown("### Input")
+            with gr.Row():
                 dng_upload = gr.File(
                     label="Upload DNG",
                     file_types=[".dng"],
@@ -187,16 +221,19 @@ def create_ui() -> gr.Blocks:
                     type="filepath",
                 )
 
-                gr.Markdown("### EXIF Info")
+            gr.Markdown("### EXIF Info")
+            with gr.Row():
                 camera_model = gr.Textbox(label="Camera Model", placeholder="e.g. Canon EOS R5")
                 lens_model = gr.Textbox(label="Lens Model", placeholder="e.g. RF 50mm f/1.2L")
                 focal_length_35mm = gr.Textbox(label="Focal Length", placeholder="e.g. 50mm")
+                captured_at = gr.Textbox(label="Capture Date", placeholder="e.g. 2024-06-15")
+            with gr.Row():
                 aperture = gr.Textbox(label="Aperture", placeholder="e.g. 2.8")
                 shutter_speed = gr.Textbox(label="Shutter Speed", placeholder="e.g. 1/125")
                 iso = gr.Textbox(label="ISO", placeholder="e.g. 400")
-                captured_at = gr.Textbox(label="Capture Date", placeholder="e.g. 2024-06-15")
 
-                gr.Markdown("### Processing")
+            gr.Markdown("### Processing")
+            with gr.Row():
                 upscale_factor = gr.Slider(
                     minimum=1, maximum=4, step=1, value=4,
                     label="Upscale Factor",
@@ -210,18 +247,22 @@ def create_ui() -> gr.Blocks:
                     minimum=0.05, maximum=0.5, step=0.01, value=0.22,
                     label="Watermark Scale",
                 )
+            with gr.Row():
                 opacity = gr.Slider(
                     minimum=0, maximum=255, step=1, value=235,
                     label="Watermark Opacity",
                 )
                 no_watermark = gr.Checkbox(label="Disable Watermark", value=False)
 
-                with gr.Row():
-                    preview_btn = gr.Button("Preview", variant="secondary")
-                    export_btn = gr.Button("Export PNG", variant="primary")
+            with gr.Row():
+                preview_btn = gr.Button("Preview", variant="secondary")
+                export_btn = gr.Button("Export PNG", variant="primary")
 
-            with gr.Column(scale=1):
+        with gr.Group():
+            gr.Markdown("### Output")
+            with gr.Row():
                 preview_image = gr.Image(label="Preview", type="pil")
+            with gr.Row():
                 status_text = gr.Textbox(label="Status", lines=6, interactive=False)
                 export_file = gr.File(label="Download Export", visible=True)
 
@@ -248,6 +289,7 @@ def create_ui() -> gr.Blocks:
 
 
 def launch_app() -> None:
+    gr = import_gradio()
     app = create_ui()
     app.launch(server_name="127.0.0.1", server_port=7860, theme=gr.themes.Soft())
 

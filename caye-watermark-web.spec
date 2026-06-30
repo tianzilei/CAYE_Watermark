@@ -41,7 +41,8 @@ gradio_client_dir = os.path.dirname(gradio_client.__file__)
 import groovy
 groovy_dir = os.path.dirname(groovy.__file__)
 
-datas = [
+datas = []
+for src, dest in [
     (os.path.join(gradio_dir, 'templates'), 'gradio/templates'),
     (os.path.join(gradio_dir, 'icons'), 'gradio/icons'),
     (os.path.join(gradio_dir, 'themes'), 'gradio/themes'),
@@ -52,7 +53,9 @@ datas = [
     (os.path.join(groovy_dir, 'version.txt'), 'groovy'),
     (os.path.join(gradio_client_dir, 'types.json'), 'gradio_client'),
     (os.path.join(gradio_client_dir, 'package.json'), 'gradio_client'),
-]
+]:
+    if os.path.exists(src):
+        datas.append((src, dest))
 
 a = Analysis(
     [os.path.join(ROOT, 'webui_launcher.py')],

@@ -19,6 +19,7 @@ from caye_watermark.pipeline import (
     parse_color,
     repair_abnormal_edges,
 )
+from caye_watermark.webui import _validate_dng_file, _validate_options
 
 
 class CliRegressionTests(unittest.TestCase):
@@ -119,6 +120,10 @@ class LogoTests(unittest.TestCase):
 
 
 class PipelineRegressionTests(unittest.TestCase):
+    def test_importing_pipeline_does_not_require_rawpy(self) -> None:
+        settings = get_restoration_settings("balanced")
+        self.assertEqual(settings.fbdd, "Light")
+
     def test_repair_abnormal_edges_preserves_dimensions(self) -> None:
         image = np.zeros((6, 8, 3), dtype=np.float32)
         image[:, 2:, :] = 120.0
@@ -198,6 +203,37 @@ class ParseColorTests(unittest.TestCase):
     def test_parse_color_none_uses_default(self) -> None:
         r, g, b, a = parse_color(None, "blue")
         self.assertEqual((r, g, b), (0, 0, 255))
+
+
+class WebUiValidationTests(unittest.TestCase):
+    def test_validate_dng_file_rejects_non_dng(self) -> None:
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+            tmp = Path(f.name)
+        try:
+            result = _validate_dng_file(str(tmp))
+            self.assertIsInstance(result, str)
+            self.assertIn("Only .DNG", result)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    def test_validate_options_rejects_invalid_scale(self) -> None:
+        options = ProcessingOptions(
+            enable_watermark=False,
+            watermark_scale=0.0,
+        )
+        result = _validate_options(options)
+        self.assertIsInstance(result, str)
+        self.assertIn("Watermark scale", result)
+
+    def test_validate_options_rejects_invalid_opacity(self) -> None:
+        options = ProcessingOptions(
+            enable_watermark=False,
+            opacity=300,
+        )
+        result = _validate_options(options)
+        self.assertIsInstance(result, str)
+        self.assertIn("opacity", result)
 
 
 if __name__ == "__main__":
