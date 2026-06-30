@@ -291,7 +291,12 @@ def create_ui() -> gr.Blocks:
 def launch_app() -> None:
     gr = import_gradio()
     app = create_ui()
-    app.launch(server_name="127.0.0.1", server_port=7860, theme=gr.themes.Soft())
+    app.launch(
+        server_name="127.0.0.1",
+        server_port=7860,
+        theme=gr.themes.Soft(),
+        inbrowser=True,
+    )
 
 
 if __name__ == "__main__":
