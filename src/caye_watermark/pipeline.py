@@ -28,6 +28,55 @@ StageReporter = Callable[[str, str], None]
 WORKING_WHITE_LEVEL = 255.0
 RAW_WHITE_LEVEL = 65535.0
 
+# ITU-R BT.601 luminance coefficients
+LUMA_R = 0.299
+LUMA_G = 0.587
+LUMA_B = 0.114
+
+# Edge detection
+EDGE_DETECT_THRESHOLD = 36.0
+EDGE_MAX_TRIM_RATIO = 20  # width // 20
+EDGE_MAX_TRIM_ABS = 12
+
+# Super-resolution
+SR_BACKPROJECT_GAIN = 0.7
+SR_FINE_DETAIL_WEIGHT = 0.95
+SR_MID_DETAIL_WEIGHT = 0.55
+SR_EDGE_MASK_POWER = 0.82
+SR_DETAIL_MASK_POWER = 0.9
+SR_DETAIL_FLOOR_RATIO = 0.18
+SR_DETAIL_PEAK_RATIO = 0.82
+SR_STRUCTURE_EDGE_WEIGHT = 0.7
+SR_STRUCTURE_DETAIL_WEIGHT = 0.3
+SR_BLUR_SMALL_RADIUS = 0.7
+SR_BLUR_LARGE_RADIUS = 1.6
+
+# Sharpness
+SHARPNESS_BOOST_MULTIPLIER = 1.2
+SHARPNESS_BLUR_RADIUS = 0.85
+
+# Local balance
+LOCAL_BALANCE_MIN_STRENGTH = 0.12
+LOCAL_BALANCE_BRIGHTNESS_MULTIPLIER = 1.9
+LOCAL_BALANCE_COLOR_SHIFT_MULTIPLIER = 8.5
+LOCAL_BALANCE_INNER_RADIUS = 0.18
+LOCAL_BALANCE_GAIN_MIN = 0.82
+LOCAL_BALANCE_GAIN_MAX = 1.22
+
+# Color cast
+CAST_GAIN_MIN = 0.82
+CAST_GAIN_MAX = 1.18
+CAST_WARM_THRESHOLD = 0.018
+CAST_GREEN_THRESHOLD = 0.015
+CAST_MODERATE_THRESHOLD = 0.035
+CAST_STRONG_THRESHOLD = 0.07
+CAST_MIN_SAMPLES = 250
+CAST_SATURATION_THRESHOLD = 0.28
+
+# Font sizing
+FONT_HEIGHT_SCALE = 1.35
+FONT_SIZE_MIN = 8
+
 FONT_SEARCH_DIRS = (
     Path("/System/Library/Fonts"),
     Path("/System/Library/Fonts/Supplemental"),
@@ -292,7 +341,7 @@ def fit_font_to_height(
     probe = Image.new("RGBA", (8, 8), (0, 0, 0, 0))
     draw = ImageDraw.Draw(probe)
 
-    font_size = max(12, int(target_height * 1.35))
+    font_size = max(FONT_SIZE_MIN, int(target_height * FONT_HEIGHT_SCALE))
     last_font = load_font(font_name, font_size, is_bold)
     last_bbox = draw.textbbox((0, 0), sample, font=last_font)
     while font_size > 8:
@@ -568,22 +617,35 @@ def render_builtin_footer_template(
     return canvas
 
 
-def build_standard_footer_definition(
+def _build_footer_definition(
     base: Image.Image,
     input_path: Path,
     options: ProcessingOptions,
+    *,
+    camera_color: str = "black",
+    lens_color: str = "#242424",
+    details_color: str = "#242424",
+    time_color: str = "#242424",
+    delimiter_color: str = "#D8D8D6",
+    right_alignment: str = "left",
+    left_margin: int | None = None,
+    right_margin: int | None = None,
+    top_margin: int | None = None,
+    bottom_margin: int | None = None,
+    details_fallback_suffix: str = "PNG",
+    time_fallback_template: str | None = None,
 ) -> dict[str, Any]:
     camera_label = clean_text(options.manual_exif.camera_model)
     lens_label = clean_text(options.manual_exif.lens_model)
     capture_details = format_capture_details(options.manual_exif)
     capture_time = clean_text(options.manual_exif.captured_at)
 
-    return {
+    definition: dict[str, Any] = {
         "left_top": {
             "text_segments": [
                 {
                     "text": camera_label,
-                    "color": "black",
+                    "color": camera_color,
                     "font_path": "AlibabaPuHuiTi-2-85-Bold.otf",
                     "is_bold": True,
                 }
@@ -591,23 +653,42 @@ def build_standard_footer_definition(
         },
         "left_bottom": {
             "text": lens_label,
-            "color": "#242424",
+            "color": lens_color,
         },
         "right_top": {
-            "text": capture_details or f"{base.width}x{base.height} PNG",
+            "text": capture_details or f"{base.width}x{base.height} {details_fallback_suffix}",
             "font_path": "AlibabaPuHuiTi-2-85-Bold.otf",
-            "color": "#242424",
+            "color": details_color,
         },
         "right_bottom": {
             "text": capture_time
-            or f"{options.restoration_profile.upper()} · {options.upscale_factor}X",
-            "color": "#242424",
+            or (time_fallback_template or f"{options.restoration_profile.upper()} · {options.upscale_factor}X"),
+            "color": time_color,
         },
         "right_logo": str(options.watermark_image) if options.watermark_image else "",
-        "delimiter_color": "#D8D8D6",
-        "right_alignment": "left",
+        "delimiter_color": delimiter_color,
+        "right_alignment": right_alignment,
         "color": "white",
     }
+
+    if left_margin is not None:
+        definition["left_margin"] = left_margin
+    if right_margin is not None:
+        definition["right_margin"] = right_margin
+    if top_margin is not None:
+        definition["top_margin"] = top_margin
+    if bottom_margin is not None:
+        definition["bottom_margin"] = bottom_margin
+
+    return definition
+
+
+def build_standard_footer_definition(
+    base: Image.Image,
+    input_path: Path,
+    options: ProcessingOptions,
+) -> dict[str, Any]:
+    return _build_footer_definition(base, input_path, options)
 
 
 def build_standard_footer_2_definition(
@@ -615,44 +696,24 @@ def build_standard_footer_2_definition(
     input_path: Path,
     options: ProcessingOptions,
 ) -> dict[str, Any]:
-    camera_label = clean_text(options.manual_exif.camera_model)
-    lens_label = clean_text(options.manual_exif.lens_model)
-    capture_details = format_capture_details(options.manual_exif)
-    capture_time = clean_text(options.manual_exif.captured_at)
-
-    return {
-        "left_top": {
-            "text_segments": [
-                {
-                    "text": camera_label,
-                    "color": "#111111",
-                    "font_path": "AlibabaPuHuiTi-2-85-Bold.otf",
-                    "is_bold": True,
-                }
-            ]
-        },
-        "left_bottom": {
-            "text": lens_label,
-            "color": "#4B4B4B",
-        },
-        "right_top": {
-            "text": capture_details or f"{base.width}x{base.height}",
-            "font_path": "AlibabaPuHuiTi-2-85-Bold.otf",
-            "color": "#111111",
-        },
-        "right_bottom": {
-            "text": capture_time
-            or f"{base.width}x{base.height} · {options.restoration_profile.upper()}",
-            "color": "#4B4B4B",
-        },
-        "right_logo": str(options.watermark_image) if options.watermark_image else "",
-        "color": "white",
-        "delimiter_color": "#FFFFFF00",
-        "left_margin": max(20, int(base.width * 0.03)),
-        "right_margin": max(20, int(base.width * 0.03)),
-        "top_margin": max(20, int(base.height * 0.03)),
-        "bottom_margin": max(44, int(base.height * 0.11)),
-    }
+    margin_x = max(20, int(base.width * 0.03))
+    margin_y = max(20, int(base.height * 0.03))
+    return _build_footer_definition(
+        base,
+        input_path,
+        options,
+        camera_color="#111111",
+        lens_color="#4B4B4B",
+        details_color="#111111",
+        time_color="#4B4B4B",
+        delimiter_color="#FFFFFF00",
+        left_margin=margin_x,
+        right_margin=margin_x,
+        top_margin=margin_y,
+        bottom_margin=max(44, int(base.height * 0.11)),
+        details_fallback_suffix="",
+        time_fallback_template=f"{base.width}x{base.height} · {options.restoration_profile.upper()}",
+    )
 
 
 def build_center_logo_definition(
@@ -696,7 +757,7 @@ def get_restoration_settings(profile: str) -> RestorationSettings:
 
 def load_image(path: Path, settings: RestorationSettings) -> np.ndarray:
     if path.suffix.lower() != ".dng":
-        raise SystemExit("Only .DNG input files are supported.")
+        raise ValueError("Only .DNG input files are supported.")
 
     with rawpy.imread(str(path)) as raw:
         rgb = raw.postprocess(
@@ -744,8 +805,8 @@ def detect_edge_crop(image: np.ndarray) -> EdgeCropAnalysis:
             distances.append(channel_distance(current, reference))
         return max(distances)
 
-    threshold = 36.0
-    max_trim = min(12, width // 20)
+    threshold = EDGE_DETECT_THRESHOLD
+    max_trim = min(EDGE_MAX_TRIM_ABS, width // EDGE_MAX_TRIM_RATIO)
     left_trim = 0
     for x in range(max_trim):
         if column_distance(x, x + 1, inner_left_x, inner_left_x + ref_band) > threshold:
@@ -810,7 +871,7 @@ def resize_float_map(channel: np.ndarray, size: tuple[int, int]) -> np.ndarray:
 
 
 def luminance_from_array(array: np.ndarray) -> np.ndarray:
-    return (array[..., 0] * 0.299) + (array[..., 1] * 0.587) + (array[..., 2] * 0.114)
+    return (array[..., 0] * LUMA_R) + (array[..., 1] * LUMA_G) + (array[..., 2] * LUMA_B)
 
 
 def resize_rgb_array(array: np.ndarray, size: tuple[int, int]) -> np.ndarray:
@@ -880,16 +941,16 @@ def gaussian_blur_rgb(array: np.ndarray, radius: float) -> np.ndarray:
 def detect_color_cast(image: np.ndarray) -> ColorCastAnalysis:
     arr = fit_array_within(image.astype(np.float32, copy=False), 160)
     flat = arr.reshape(-1, 3)
-    luminance = (flat[:, 0] * 0.299) + (flat[:, 1] * 0.587) + (flat[:, 2] * 0.114)
+    luminance = (flat[:, 0] * LUMA_R) + (flat[:, 1] * LUMA_G) + (flat[:, 2] * LUMA_B)
     low = np.percentile(luminance, 12.0)
     high = np.percentile(luminance, 97.5)
     channel_max = flat.max(axis=1)
     channel_min = flat.min(axis=1)
     saturation = (channel_max - channel_min) / np.maximum(channel_max, 1.0)
-    neutral_mask = (luminance >= low) & (luminance <= high) & (saturation <= 0.28)
-    if neutral_mask.sum() < 250:
+    neutral_mask = (luminance >= low) & (luminance <= high) & (saturation <= CAST_SATURATION_THRESHOLD)
+    if neutral_mask.sum() < CAST_MIN_SAMPLES:
         neutral_mask = (luminance >= low) & (luminance <= high)
-    if neutral_mask.sum() < 250:
+    if neutral_mask.sum() < CAST_MIN_SAMPLES:
         neutral_mask = np.ones(len(flat), dtype=bool)
 
     red_mean, green_mean, blue_mean = flat[neutral_mask].mean(axis=0)
@@ -899,17 +960,17 @@ def detect_color_cast(image: np.ndarray) -> ColorCastAnalysis:
     green_score = (green_mean - ((red_mean + blue_mean) / 2.0)) / average
 
     cast_parts = []
-    if abs(warm_score) >= 0.018:
+    if abs(warm_score) >= CAST_WARM_THRESHOLD:
         cast_parts.append("warm" if warm_score > 0 else "cool")
-    if abs(green_score) >= 0.015:
+    if abs(green_score) >= CAST_GREEN_THRESHOLD:
         cast_parts.append("green" if green_score > 0 else "magenta")
 
     magnitude = max(abs(warm_score), abs(green_score))
-    if magnitude < 0.015:
+    if magnitude < CAST_GREEN_THRESHOLD:
         severity = "neutral"
-    elif magnitude < 0.035:
+    elif magnitude < CAST_MODERATE_THRESHOLD:
         severity = "slight"
-    elif magnitude < 0.07:
+    elif magnitude < CAST_STRONG_THRESHOLD:
         severity = "moderate"
     else:
         severity = "strong"
@@ -917,9 +978,9 @@ def detect_color_cast(image: np.ndarray) -> ColorCastAnalysis:
     label = "neutral" if not cast_parts else "-".join(cast_parts)
     target = average
     gains = (
-        max(0.82, min(1.18, target / max(1.0, red_mean))),
-        max(0.82, min(1.18, target / max(1.0, green_mean))),
-        max(0.82, min(1.18, target / max(1.0, blue_mean))),
+        max(CAST_GAIN_MIN, min(CAST_GAIN_MAX, target / max(1.0, red_mean))),
+        max(CAST_GAIN_MIN, min(CAST_GAIN_MAX, target / max(1.0, green_mean))),
+        max(CAST_GAIN_MIN, min(CAST_GAIN_MAX, target / max(1.0, blue_mean))),
     )
     return ColorCastAnalysis(
         label=label,
@@ -949,17 +1010,17 @@ def analyze_local_balance(image: np.ndarray) -> LocalBalanceAnalysis:
 
     center_mean = center.reshape(-1, 3).mean(axis=0)
     edge_mean = edges.reshape(-1, 3).mean(axis=0)
-    center_luma = float(center_mean[0] * 0.299 + center_mean[1] * 0.587 + center_mean[2] * 0.114)
-    edge_luma = float(edge_mean[0] * 0.299 + edge_mean[1] * 0.587 + edge_mean[2] * 0.114)
+    center_luma = float(center_mean[0] * LUMA_R + center_mean[1] * LUMA_G + center_mean[2] * LUMA_B)
+    edge_luma = float(edge_mean[0] * LUMA_R + edge_mean[1] * LUMA_G + edge_mean[2] * LUMA_B)
     brightness_ratio = edge_luma / max(center_luma, 1.0)
 
     center_norm = center_mean / max(center_mean.mean(), 1.0)
     edge_norm = edge_mean / max(edge_mean.mean(), 1.0)
     color_shift = float(np.max(np.abs(edge_norm - center_norm)))
 
-    strength = min(1.0, max(abs(1.0 - brightness_ratio) * 1.9, color_shift * 8.5))
+    strength = min(1.0, max(abs(1.0 - brightness_ratio) * LOCAL_BALANCE_BRIGHTNESS_MULTIPLIER, color_shift * LOCAL_BALANCE_COLOR_SHIFT_MULTIPLIER))
     return LocalBalanceAnalysis(
-        applied=strength >= 0.12,
+        applied=strength >= LOCAL_BALANCE_MIN_STRENGTH,
         strength=strength,
         brightness_ratio=brightness_ratio,
         color_shift=color_shift,
@@ -989,7 +1050,7 @@ def apply_local_balance_correction(
     gain_channels = []
     for index in range(3):
         gain_small = center_reference[index] / np.clip(small_arr[..., index], 1.0, None)
-        gain_small = np.clip(gain_small, 0.82, 1.22)
+        gain_small = np.clip(gain_small, LOCAL_BALANCE_GAIN_MIN, LOCAL_BALANCE_GAIN_MAX)
         gain_channels.append(resize_float_map(gain_small, (width, height)))
     gain_map = np.stack(gain_channels, axis=-1)
 
@@ -997,7 +1058,7 @@ def apply_local_balance_correction(
     normalized_x = (xx - ((width - 1) / 2.0)) / max(width / 2.0, 1.0)
     normalized_y = (yy - ((height - 1) / 2.0)) / max(height / 2.0, 1.0)
     radius = np.sqrt((normalized_x * normalized_x) + (normalized_y * normalized_y))
-    mask = np.clip((radius - 0.18) / 0.82, 0.0, 1.0)
+    mask = np.clip((radius - LOCAL_BALANCE_INNER_RADIUS) / (1.0 - LOCAL_BALANCE_INNER_RADIUS), 0.0, 1.0)
     mask = mask * mask * (3.0 - (2.0 * mask))
 
     strength = min(1.0, analysis.strength * settings.local_balance_strength)
@@ -1016,7 +1077,7 @@ def apply_auto_tone_curve(image: np.ndarray, strength: float) -> np.ndarray:
 
     arr = image.astype(np.float32, copy=False)
     flat = arr.reshape(-1, 3)
-    luminance = (flat[:, 0] * 0.299) + (flat[:, 1] * 0.587) + (flat[:, 2] * 0.114)
+    luminance = (flat[:, 0] * LUMA_R) + (flat[:, 1] * LUMA_G) + (flat[:, 2] * LUMA_B)
     low = float(np.percentile(luminance, 0.6))
     high = float(np.percentile(luminance, 99.4))
     if high - low < 18.0:
@@ -1069,13 +1130,13 @@ def reconstruct_super_resolution(
     for _ in range(settings.backprojection_passes):
         projected = resize_rgb_array(refined, original_size)
         reconstruction_error = source_arr - projected
-        refined += resize_rgb_array(reconstruction_error, target_size) * 0.7
+        refined += resize_rgb_array(reconstruction_error, target_size) * SR_BACKPROJECT_GAIN
 
-    blur_small = gaussian_blur_rgb(source_arr, radius=0.7)
-    blur_large = gaussian_blur_rgb(source_arr, radius=1.6)
+    blur_small = gaussian_blur_rgb(source_arr, radius=SR_BLUR_SMALL_RADIUS)
+    blur_large = gaussian_blur_rgb(source_arr, radius=SR_BLUR_LARGE_RADIUS)
     fine_detail = source_arr - blur_small
     mid_detail = blur_small - blur_large
-    detail_signal = (fine_detail * 0.95) + (mid_detail * 0.55)
+    detail_signal = (fine_detail * SR_FINE_DETAIL_WEIGHT) + (mid_detail * SR_MID_DETAIL_WEIGHT)
 
     source_luma = luminance_from_array(source_arr)
     detail_luma = luminance_from_array(detail_signal)
@@ -1090,7 +1151,7 @@ def reconstruct_super_resolution(
         0.0,
         1.0,
     )
-    edge_mask = np.power(edge_mask, 0.82)
+    edge_mask = np.power(edge_mask, SR_EDGE_MASK_POWER)
 
     detail_magnitude = np.abs(detail_luma)
     detail_floor = float(np.percentile(detail_magnitude, 55.0))
@@ -1100,15 +1161,15 @@ def reconstruct_super_resolution(
         0.0,
         1.0,
     )
-    detail_mask = np.power(detail_mask, 0.9)
+    detail_mask = np.power(detail_mask, SR_DETAIL_MASK_POWER)
 
-    structure_mask = np.clip((edge_mask * 0.7) + (detail_mask * 0.3), 0.0, 1.0)
+    structure_mask = np.clip((edge_mask * SR_STRUCTURE_EDGE_WEIGHT) + (detail_mask * SR_STRUCTURE_DETAIL_WEIGHT), 0.0, 1.0)
     upscaled_detail = resize_float_map(detail_luma, target_size)
     upscaled_mask = resize_float_map(structure_mask, target_size)
     upscaled_mask = np.clip(upscaled_mask, 0.0, 1.0)
 
     refined_luma = luminance_from_array(refined)
-    detail_gain = settings.superres_strength * (0.18 + (upscaled_mask * 0.82))
+    detail_gain = settings.superres_strength * (SR_DETAIL_FLOOR_RATIO + (upscaled_mask * SR_DETAIL_PEAK_RATIO))
     reconstructed_luma = refined_luma + (upscaled_detail * detail_gain)
 
     luma_ratio = (reconstructed_luma + 1e-3) / (refined_luma + 1e-3)
@@ -1156,10 +1217,10 @@ def apply_color_saturation(image: np.ndarray, factor: float) -> np.ndarray:
 def apply_sharpness_adjustment(image: np.ndarray, factor: float) -> np.ndarray:
     if abs(factor - 1.0) < 1e-6:
         return image
-    blurred = gaussian_blur_rgb(image, radius=0.85)
+    blurred = gaussian_blur_rgb(image, radius=SHARPNESS_BLUR_RADIUS)
     detail = image - blurred
     if factor > 1.0:
-        adjusted = image + (detail * ((factor - 1.0) * 1.2))
+        adjusted = image + (detail * ((factor - 1.0) * SHARPNESS_BOOST_MULTIPLIER))
     else:
         adjusted = image + (detail * (factor - 1.0))
     return np.clip(adjusted, 0.0, WORKING_WHITE_LEVEL)
@@ -1318,6 +1379,13 @@ def add_logo_outline(base: Image.Image, logo_path: Path, scale_ratio: float, opa
     return result
 
 
+_LOGO_TEMPLATE_DISPATCH = {
+    "logo-stamp": add_logo_stamp,
+    "logo-chip": add_logo_chip,
+    "logo-outline": add_logo_outline,
+}
+
+
 def apply_template(
     image: Image.Image,
     options: ProcessingOptions,
@@ -1325,33 +1393,18 @@ def apply_template(
 ) -> Image.Image:
     if not options.enable_watermark:
         return image
-    if options.template == "logo-stamp":
+
+    logo_fn = _LOGO_TEMPLATE_DISPATCH.get(options.template)
+    if logo_fn is not None:
         if options.watermark_image is None:
-            raise ValueError("The logo-stamp template requires --watermark-image.")
-        return add_logo_stamp(
+            raise ValueError(f"The {options.template} template requires --watermark-image.")
+        return logo_fn(
             image,
             options.watermark_image,
             options.watermark_scale,
             options.opacity,
         )
-    if options.template == "logo-chip":
-        if options.watermark_image is None:
-            raise ValueError("The logo-chip template requires --watermark-image.")
-        return add_logo_chip(
-            image,
-            options.watermark_image,
-            options.watermark_scale,
-            options.opacity,
-        )
-    if options.template == "logo-outline":
-        if options.watermark_image is None:
-            raise ValueError("The logo-outline template requires --watermark-image.")
-        return add_logo_outline(
-            image,
-            options.watermark_image,
-            options.watermark_scale,
-            options.opacity,
-        )
+
     if options.watermark_image is None:
         raise ValueError(f"The {options.template} template requires --watermark-image.")
     return render_styled_template(image, input_path, options)
@@ -1361,7 +1414,7 @@ def export_image(image: Image.Image, output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     suffix = output_path.suffix.lower()
     if suffix != ".png":
-        raise SystemExit("Output file must use the .png extension.")
+        raise ValueError("Output file must use the .png extension.")
     image.save(output_path, format="PNG", compress_level=2)
 
 

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import shutil
 import tempfile
 from pathlib import Path
 
 import gradio as gr
 from PIL import Image
 
+from caye_watermark._logo import find_default_logo
 from caye_watermark.pipeline import (
     RESTORATION_PROFILES,
     TEMPLATES,
@@ -13,21 +15,6 @@ from caye_watermark.pipeline import (
     ProcessingOptions,
     process_image,
 )
-
-
-def find_default_logo() -> Path | None:
-    candidates = [
-        Path.cwd() / "Example" / "Brands" / "CAYE.png",
-        Path.cwd() / "Example" / "Brands" / "CAYE.webp",
-        Path.cwd() / "Example" / "Brands" / "Laiye.png",
-        Path.cwd() / "CAYE.png",
-        Path.cwd() / "CAYE.webp",
-        Path.cwd() / "Laiye.png",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate.resolve()
-    return None
 
 
 def build_options(
@@ -48,7 +35,9 @@ def build_options(
 ) -> ProcessingOptions:
     resolved_logo: Path | None = None
     if logo_path:
-        resolved_logo = Path(logo_path)
+        p = Path(logo_path)
+        if p.exists():
+            resolved_logo = p
     elif not no_watermark:
         resolved_logo = find_default_logo()
 
@@ -70,6 +59,12 @@ def build_options(
             captured_at=captured_at or "",
         ),
     )
+
+
+def _validate_options(options: ProcessingOptions) -> str | None:
+    if options.enable_watermark and options.watermark_image is None:
+        return "Error: A logo is required when watermark is enabled. Upload a logo or disable watermark."
+    return None
 
 
 def run_preview(
@@ -100,19 +95,16 @@ def run_preview(
         aperture, shutter_speed, iso, captured_at,
     )
 
-    if not options.enable_watermark and options.watermark_image is None:
-        pass
-    elif options.enable_watermark and options.watermark_image is None:
-        return None, "Error: A logo is required when watermark is enabled. Upload a logo or disable watermark."
+    error = _validate_options(options)
+    if error:
+        return None, error
 
     messages: list[str] = []
 
     def reporter(stage: str, message: str) -> None:
         messages.append(f"[{stage}] {message}")
 
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        output_path = Path(tmp.name)
-
+    output_path = Path(tempfile.mktemp(suffix=".png"))
     try:
         process_image(input_path, output_path, options, reporter=reporter)
         preview_img = Image.open(output_path)
@@ -120,6 +112,8 @@ def run_preview(
         return preview_img, status
     except Exception as exc:
         return None, f"Error: {exc}"
+    finally:
+        output_path.unlink(missing_ok=True)
 
 
 def run_export(
@@ -150,10 +144,9 @@ def run_export(
         aperture, shutter_speed, iso, captured_at,
     )
 
-    if not options.enable_watermark and options.watermark_image is None:
-        pass
-    elif options.enable_watermark and options.watermark_image is None:
-        return None, "Error: A logo is required when watermark is enabled."
+    error = _validate_options(options)
+    if error:
+        return None, error
 
     messages: list[str] = []
 
@@ -168,6 +161,7 @@ def run_export(
         status = "\n".join(messages)
         return str(output_path), status
     except Exception as exc:
+        shutil.rmtree(output_dir, ignore_errors=True)
         return None, f"Error: {exc}"
 
 

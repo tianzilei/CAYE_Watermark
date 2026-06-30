@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from caye_watermark._logo import find_default_logo
 from caye_watermark.pipeline import (
     ManualExif,
     ProcessingOptions,
@@ -126,20 +127,8 @@ def build_output_path(
 
 
 def find_default_logo(input_path: Path) -> Path | None:
-    candidates = [
-        Path.cwd() / "Example" / "Brands" / "CAYE.png",
-        Path.cwd() / "Example" / "Brands" / "CAYE.webp",
-        Path.cwd() / "Example" / "Brands" / "Laiye.png",
-        input_path.parent / "CAYE.png",
-        input_path.parent / "CAYE.webp",
-        Path.cwd() / "CAYE.webp",
-        input_path.parent / "Laiye.png",
-        Path.cwd() / "Laiye.png",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate.resolve()
-    return None
+    from caye_watermark._logo import find_default_logo as _find
+    return _find(input_path)
 
 
 def validate_args(args: argparse.Namespace) -> argparse.Namespace:
@@ -148,6 +137,11 @@ def validate_args(args: argparse.Namespace) -> argparse.Namespace:
         raise SystemExit(f"Input file does not exist: {args.input_file}")
     if args.input_file.suffix.lower() != ".dng":
         raise SystemExit("Only .DNG input files are supported.")
+
+    if not 0.0 < args.watermark_scale <= 1.0:
+        raise SystemExit("--watermark-scale must be between 0 (exclusive) and 1.0 (inclusive).")
+    if not 0 <= args.opacity <= 255:
+        raise SystemExit("--opacity must be between 0 and 255.")
 
     args.output_file = build_output_path(
         args.input_file,
@@ -215,10 +209,19 @@ def build_reporter(enabled: bool):
 
 
 def main() -> None:
-    args = validate_args(parse_args())
-    options = create_options(args)
-    reporter = build_reporter(not args.quiet)
-    process_image(args.input_file, args.output_file, options, reporter=reporter)
+    try:
+        args = validate_args(parse_args())
+        options = create_options(args)
+        reporter = build_reporter(not args.quiet)
+        process_image(args.input_file, args.output_file, options, reporter=reporter)
+    except SystemExit:
+        raise
+    except KeyboardInterrupt:
+        print("\nInterrupted.", file=__import__('sys').stderr)
+        raise SystemExit(130)
+    except Exception as exc:
+        print(f"Error: {exc}", file=__import__('sys').stderr)
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
