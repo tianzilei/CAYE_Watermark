@@ -12,10 +12,12 @@ dependencies = [
   "numpy>=2.0.0",
   "Pillow>=10.0.0",
   "rawpy>=0.20.0",
+  "gradio>=4.0.0",
 ]
 
 [project.scripts]
 caye-watermark = "caye_watermark.cli:main"
+caye-watermark-web = "caye_watermark.webui:launch_app"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
