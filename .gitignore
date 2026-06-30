@@ -28,3 +28,5 @@ tmp_audit/
 tmp_audit_fixed/
 tmp_fixcheck/
 semi-utils/
+*.spec.bak
+*.log
