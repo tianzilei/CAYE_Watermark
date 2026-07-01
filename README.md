@@ -28,7 +28,7 @@ pip install -e .
 
 ## 快速开始
 
-使用 [Example/Brands/CAYE.png](/Users/zileitian/Downloads/CAYE_Watermark/Example/Brands/CAYE.png) 作为默认水印，处理 `Example/Raw` 中的单张 `DNG`：
+使用内置打包的 `CAYE.webp` 默认水印，处理 `Example/Raw` 中的单张 `DNG`：
 
 ```bash
 caye-watermark \
@@ -59,7 +59,7 @@ caye-watermark \
 - `--input-file`：输入文件
 - `--output-file`：输出 `PNG` 文件；不传时会按当前模式自动生成
 - `--template`：内置水印模板名
-- `--watermark-image`：Logo 路径；默认优先查找 `Example/Brands/CAYE.png`
+- `--watermark-image`：Logo 路径；默认优先使用包内置的 `CAYE.webp`
 - `--upscale-factor`：放大倍数，可选 `1`、`2`、`4`，默认 `4`
 - `--restoration-profile`：修复配置，可选 `detail`、`balanced`、`clean`
 - `--watermark-scale`：Logo 宽度占输出图宽度比例，默认 `0.22`
@@ -131,6 +131,7 @@ caye-watermark \
 - 未指定 `--output-file` 时，带水印默认输出 `*_watermarked.png`
 - 未指定 `--output-file` 且使用 `--no-watermark` 时，默认输出 `*_review.png`
 - 如果显式指定输出文件，扩展名必须是 `.png`
+- WebUI 导出文件会默认保存到用户目录下的 `Downloads/caye_exports`
 
 ## 实时状态
 

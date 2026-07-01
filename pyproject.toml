@@ -21,9 +21,13 @@ caye-watermark-web = "caye_watermark.webui:launch_app"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+caye_watermark = ["assets/brands/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

@@ -47,6 +47,9 @@ datas = []
 brands_dir = os.path.join(ROOT, 'Example', 'Brands')
 if os.path.isdir(brands_dir):
     datas.append((brands_dir, os.path.join('Example', 'Brands')))
+package_brands_dir = os.path.join(ROOT, 'src', 'caye_watermark', 'assets', 'brands')
+if os.path.isdir(package_brands_dir):
+    datas.append((package_brands_dir, os.path.join('caye_watermark', 'assets', 'brands')))
 
 data_candidates = [
     (os.path.join(gradio_dir, 'templates'), 'gradio/templates'),

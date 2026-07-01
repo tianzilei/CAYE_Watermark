@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from caye_watermark._logo import LOGO_CHOICES, find_default_logo, resolve_preset_logo
+from caye_watermark._logo import LOGO_CHOICES, PACKAGE_BRANDS_DIR, find_default_logo, resolve_preset_logo
 from caye_watermark.cli import build_output_path, validate_args
 from caye_watermark.pipeline import (
     DEFAULT_FONT_CANDIDATES,
@@ -140,10 +140,19 @@ class LogoTests(unittest.TestCase):
             self.assertEqual(result.name, "HACHIMITSU.png")
 
     def test_find_default_logo_returns_none_when_no_files_exist(self) -> None:
-        with patch("caye_watermark._logo.Path.cwd") as mock_cwd:
+        with (
+            patch("caye_watermark._logo.PACKAGE_ROOT", Path("/nonexistent_pkg")),
+            patch("caye_watermark._logo.Path.cwd") as mock_cwd,
+        ):
             mock_cwd.return_value = Path("/nonexistent_dir")
             result = find_default_logo()
             self.assertIsNone(result)
+
+    def test_find_default_logo_prefers_packaged_assets(self) -> None:
+        result = find_default_logo()
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.parent, PACKAGE_BRANDS_DIR)
 
 
 class PipelineRegressionTests(unittest.TestCase):
@@ -410,7 +419,8 @@ class WebUiValidationTests(unittest.TestCase):
         self.assertTrue(old_file.unlinked)
 
     def test_get_export_root_uses_workspace_directory_when_not_frozen(self) -> None:
-        self.assertEqual(get_export_root(), Path.cwd() / "caye_exports")
+        with patch("caye_watermark.webui.Path.home", return_value=Path("/tmp/caye-home")):
+            self.assertEqual(get_export_root(), Path("/tmp/caye-home/Downloads/caye_exports"))
 
     def test_find_available_port_skips_busy_port(self) -> None:
         import socket
@@ -423,6 +433,29 @@ class WebUiValidationTests(unittest.TestCase):
             selected_port = find_available_port("127.0.0.1", busy_port)
 
         self.assertEqual(selected_port, busy_port + 1)
+
+    def test_find_available_port_falls_back_outside_scan_window(self) -> None:
+        import socket
+
+        sockets = []
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.bind(("127.0.0.1", 0))
+                start_port = probe.getsockname()[1]
+
+            for port in range(start_port, start_port + 11):
+                busy_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                busy_socket.bind(("127.0.0.1", port))
+                busy_socket.listen(1)
+                sockets.append(busy_socket)
+
+            selected_port = find_available_port("127.0.0.1", start_port)
+        finally:
+            for busy_socket in sockets:
+                busy_socket.close()
+
+        self.assertNotEqual(selected_port, 0)
+        self.assertGreater(selected_port, 0)
 
     def test_validate_options_rejects_invalid_scale(self) -> None:
         options = ProcessingOptions(
