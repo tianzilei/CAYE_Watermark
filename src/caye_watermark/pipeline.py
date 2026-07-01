@@ -78,6 +78,10 @@ CAST_SATURATION_THRESHOLD = 0.28
 # Font sizing
 FONT_HEIGHT_SCALE = 1.35
 FONT_SIZE_MIN = 8
+FOOTER_RIGHT_LOGO_MARGIN_RATIO = 0.045
+FOOTER_RIGHT_LOGO_MARGIN_MIN = 28
+CENTER_LOGO_HEIGHT_RATIO = 0.065
+CENTER_LOGO_HEIGHT_MIN = 42
 
 FONT_SEARCH_DIRS = (
     Path("C:/Windows/Fonts"),
@@ -267,6 +271,15 @@ def ensure_suffix(value: str, suffix: str) -> str:
     return f"{normalized}{suffix}"
 
 
+def format_shutter_speed(value: str | None) -> str:
+    normalized = clean_text(value)
+    if not normalized:
+        return ""
+    if normalized.isdecimal():
+        return f"1/{normalized}"
+    return normalized
+
+
 def format_capture_details(metadata: ManualExif) -> str:
     parts = []
     focal = clean_text(metadata.focal_length_35mm)
@@ -277,11 +290,11 @@ def format_capture_details(metadata: ManualExif) -> str:
     if aperture:
         parts.append(aperture)
 
-    shutter = ensure_suffix(metadata.shutter_speed, "s")
+    shutter = format_shutter_speed(metadata.shutter_speed)
     if shutter:
         parts.append(shutter)
 
-    iso = ensure_prefix(metadata.iso, "ISO")
+    iso = ensure_prefix(metadata.iso, "ASA")
     if iso:
         parts.append(iso)
     return "  ".join(parts)
@@ -515,6 +528,7 @@ def render_builtin_footer_template(
     right_margin = parse_int(definition.get("right_margin"), 0)
     top_margin = parse_int(definition.get("top_margin"), 0)
     footer_height = parse_int(definition.get("bottom_margin"), int(base.height * 0.12))
+    right_logo_margin = parse_int(definition.get("right_logo_margin"), 0)
     default_text_height = max(16, int(footer_height * 0.3))
     middle_spacing = parse_int(
         definition.get("middle_spacing"),
@@ -589,7 +603,7 @@ def render_builtin_footer_template(
     if right_logo:
         logo_size = max(default_text_height * 2, text_column_height)
         right_logo = resize_to_height(right_logo, logo_size)
-        right_logo_x = canvas_width - right_margin - right_logo.width
+        right_logo_x = canvas_width - right_margin - right_logo_margin - right_logo.width
         right_logo_y = footer_start_y + max(0, (footer_height - right_logo.height) // 2)
         canvas.alpha_composite(right_logo, (right_logo_x, right_logo_y))
 
@@ -639,10 +653,9 @@ def _build_footer_definition(
     right_alignment: str = "left",
     left_margin: int | None = None,
     right_margin: int | None = None,
+    right_logo_margin: int | None = None,
     top_margin: int | None = None,
     bottom_margin: int | None = None,
-    details_fallback_suffix: str = "PNG",
-    time_fallback_template: str | None = None,
 ) -> dict[str, Any]:
     camera_label = clean_text(options.manual_exif.camera_model)
     lens_label = clean_text(options.manual_exif.lens_model)
@@ -665,13 +678,12 @@ def _build_footer_definition(
             "color": lens_color,
         },
         "right_top": {
-            "text": capture_details or f"{base.width}x{base.height} {details_fallback_suffix}",
+            "text": capture_details,
             "font_path": "AlibabaPuHuiTi-2-85-Bold.otf",
             "color": details_color,
         },
         "right_bottom": {
-            "text": capture_time
-            or (time_fallback_template or f"{options.restoration_profile.upper()} · {options.upscale_factor}X"),
+            "text": capture_time,
             "color": time_color,
         },
         "right_logo": str(options.watermark_image) if options.watermark_image else "",
@@ -684,6 +696,8 @@ def _build_footer_definition(
         definition["left_margin"] = left_margin
     if right_margin is not None:
         definition["right_margin"] = right_margin
+    if right_logo_margin is not None:
+        definition["right_logo_margin"] = right_logo_margin
     if top_margin is not None:
         definition["top_margin"] = top_margin
     if bottom_margin is not None:
@@ -697,7 +711,15 @@ def build_standard_footer_definition(
     input_path: Path,
     options: ProcessingOptions,
 ) -> dict[str, Any]:
-    return _build_footer_definition(base, input_path, options)
+    return _build_footer_definition(
+        base,
+        input_path,
+        options,
+        right_logo_margin=max(
+            FOOTER_RIGHT_LOGO_MARGIN_MIN,
+            int(base.width * FOOTER_RIGHT_LOGO_MARGIN_RATIO),
+        ),
+    )
 
 
 def build_standard_footer_2_definition(
@@ -718,10 +740,12 @@ def build_standard_footer_2_definition(
         delimiter_color="#FFFFFF00",
         left_margin=margin_x,
         right_margin=margin_x,
+        right_logo_margin=max(
+            FOOTER_RIGHT_LOGO_MARGIN_MIN,
+            int(base.width * FOOTER_RIGHT_LOGO_MARGIN_RATIO),
+        ),
         top_margin=margin_y,
         bottom_margin=max(44, int(base.height * 0.11)),
-        details_fallback_suffix="",
-        time_fallback_template=f"{base.width}x{base.height} · {options.restoration_profile.upper()}",
     )
 
 
@@ -735,7 +759,7 @@ def build_center_logo_definition(
         "right_top": {"text": ""},
         "right_bottom": {"text": ""},
         "center_logo": str(options.watermark_image) if options.watermark_image else "",
-        "center_height": max(18, int(base.height * 0.02)),
+        "center_height": max(CENTER_LOGO_HEIGHT_MIN, int(base.height * CENTER_LOGO_HEIGHT_RATIO)),
         "left_margin": max(18, int(base.height * 0.02)),
         "right_margin": max(18, int(base.height * 0.02)),
     }

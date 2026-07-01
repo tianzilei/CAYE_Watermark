@@ -15,7 +15,11 @@ from caye_watermark.pipeline import (
     ManualExif,
     ProcessingOptions,
     apply_opacity,
+    build_center_logo_definition,
+    build_standard_footer_2_definition,
+    build_standard_footer_definition,
     detect_edge_crop,
+    format_capture_details,
     get_restoration_settings,
     optimize_image,
     parse_color,
@@ -26,6 +30,8 @@ from caye_watermark.webui import (
     _validate_options,
     build_options,
     cleanup_old_exports,
+    find_available_port,
+    get_export_root,
     render_dng_input,
 )
 
@@ -199,6 +205,45 @@ class PipelineRegressionTests(unittest.TestCase):
         alpha = result.getchannel("A")
         self.assertEqual(alpha.getpixel((0, 0)), 0)
 
+    def test_format_capture_details_uses_asa_prefix(self) -> None:
+        self.assertEqual(format_capture_details(ManualExif(iso="400")), "ASA400")
+        self.assertEqual(format_capture_details(ManualExif(iso="ASA800")), "ASA800")
+
+    def test_format_capture_details_formats_shutter_denominator(self) -> None:
+        self.assertEqual(format_capture_details(ManualExif(shutter_speed="125")), "1/125")
+        self.assertEqual(format_capture_details(ManualExif(shutter_speed="1/400")), "1/400")
+
+    def test_footer_templates_keep_right_logo_away_from_edge(self) -> None:
+        from PIL import Image
+
+        image = Image.new("RGBA", (640, 480), (0, 0, 0, 255))
+        options = ProcessingOptions(watermark_image=Path("CAYE.webp"))
+
+        standard = build_standard_footer_definition(image, Path("input.DNG"), options)
+        standard_2 = build_standard_footer_2_definition(image, Path("input.DNG"), options)
+
+        self.assertGreaterEqual(standard["right_logo_margin"], 28)
+        self.assertGreaterEqual(standard_2["right_logo_margin"], 28)
+
+    def test_center_logo_template_uses_larger_logo_height(self) -> None:
+        from PIL import Image
+
+        image = Image.new("RGBA", (640, 480), (0, 0, 0, 255))
+        options = ProcessingOptions(watermark_image=Path("CAYE.webp"))
+        definition = build_center_logo_definition(image, options)
+
+        self.assertGreaterEqual(definition["center_height"], 42)
+
+    def test_footer_template_does_not_emit_processing_fallback_text(self) -> None:
+        from PIL import Image
+
+        image = Image.new("RGBA", (640, 480), (0, 0, 0, 255))
+        options = ProcessingOptions(watermark_image=Path("CAYE.webp"))
+        definition = build_standard_footer_definition(image, Path("input.DNG"), options)
+
+        self.assertEqual(definition["right_top"]["text"], "")
+        self.assertEqual(definition["right_bottom"]["text"], "")
+
 
 class RestorationSettingsTests(unittest.TestCase):
     def test_get_restoration_settings_valid_profile(self) -> None:
@@ -316,20 +361,34 @@ class WebUiValidationTests(unittest.TestCase):
             tmp.unlink(missing_ok=True)
 
     def test_cleanup_old_exports_removes_expired_export_dirs(self) -> None:
-        class FakeExportDir:
-            def __init__(self, name: str, mtime: float, is_directory: bool = True) -> None:
+        class FakeExportPath:
+            def __init__(
+                self,
+                name: str,
+                mtime: float,
+                is_directory: bool = True,
+                is_file: bool = False,
+            ) -> None:
                 self.name = name
                 self.mtime = mtime
                 self.is_directory = is_directory
+                self.file = is_file
+                self.unlinked = False
 
             def is_dir(self) -> bool:
                 return self.is_directory
 
+            def is_file(self) -> bool:
+                return self.file
+
             def stat(self):
                 return type("Stat", (), {"st_mtime": self.mtime})()
 
+            def unlink(self, missing_ok: bool = False) -> None:
+                self.unlinked = True
+
         class FakeTempRoot:
-            def __init__(self, entries: list[FakeExportDir]) -> None:
+            def __init__(self, entries: list[FakeExportPath]) -> None:
                 self.entries = entries
                 self.pattern = ""
 
@@ -337,16 +396,33 @@ class WebUiValidationTests(unittest.TestCase):
                 self.pattern = pattern
                 return iter(self.entries)
 
-        old_dir = FakeExportDir("caye_export_old", 1000.0)
-        keep_dir = FakeExportDir("caye_export_keep", 1000.0 + (24 * 60 * 60))
-        non_dir = FakeExportDir("caye_export_file", 1000.0, is_directory=False)
-        root = FakeTempRoot([old_dir, keep_dir, non_dir])
+        old_dir = FakeExportPath("caye_export_old", 1000.0)
+        keep_dir = FakeExportPath("caye_export_keep", 1000.0 + (24 * 60 * 60))
+        old_file = FakeExportPath("caye_export_old.png", 1000.0, is_directory=False, is_file=True)
+        ignored_path = FakeExportPath("caye_export_unknown", 1000.0, is_directory=False)
+        root = FakeTempRoot([old_dir, keep_dir, old_file, ignored_path])
 
         with patch("caye_watermark.webui.shutil.rmtree") as mock_rmtree:
             cleanup_old_exports(now=1000.0 + (25 * 60 * 60), temp_root=root)
 
         self.assertEqual(root.pattern, "caye_export_*")
         mock_rmtree.assert_called_once_with(old_dir, ignore_errors=True)
+        self.assertTrue(old_file.unlinked)
+
+    def test_get_export_root_uses_workspace_directory_when_not_frozen(self) -> None:
+        self.assertEqual(get_export_root(), Path.cwd() / "caye_exports")
+
+    def test_find_available_port_skips_busy_port(self) -> None:
+        import socket
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as busy_socket:
+            busy_socket.bind(("127.0.0.1", 0))
+            busy_socket.listen(1)
+            busy_port = busy_socket.getsockname()[1]
+
+            selected_port = find_available_port("127.0.0.1", busy_port)
+
+        self.assertEqual(selected_port, busy_port + 1)
 
     def test_validate_options_rejects_invalid_scale(self) -> None:
         options = ProcessingOptions(

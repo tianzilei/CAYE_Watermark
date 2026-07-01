@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import shutil
+import socket
+import sys
 import tempfile
+import threading
 import time
 import inspect
+import os
+import uuid
+import warnings
+import webbrowser
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -25,6 +32,9 @@ if TYPE_CHECKING:
     import gradio as gr
 
 EXPORT_RETENTION_SECONDS = 24 * 60 * 60
+EXPORT_DIR_NAME = "caye_exports"
+DEFAULT_WEB_PORT = 7860
+WEB_PORT_SCAN_LIMIT = 10
 
 APP_CSS = """
 :root {
@@ -107,11 +117,31 @@ APP_CSS = """
     background: #fbfcfd !important;
 }
 
-.caye-dng-preview .image-container,
-.caye-output-preview .image-container {
+.caye-dng-preview .image-container {
     border-radius: 8px !important;
     border: 1px solid var(--caye-border) !important;
     background: #101820 !important;
+}
+
+.caye-output-preview {
+    display: inline-block !important;
+    width: fit-content !important;
+    max-width: 100% !important;
+}
+
+.caye-output-preview .image-container {
+    border-radius: 8px !important;
+    border: 1px solid var(--caye-border) !important;
+    background: #ffffff !important;
+    width: fit-content !important;
+    max-width: 100% !important;
+}
+
+.caye-output-preview img {
+    display: block !important;
+    width: auto !important;
+    height: auto !important;
+    max-width: 100% !important;
 }
 
 .caye-dng-preview img,
@@ -121,6 +151,10 @@ APP_CSS = """
 
 .caye-form-row {
     gap: 12px !important;
+}
+
+.caye-date-field input {
+    min-width: 0 !important;
 }
 
 .caye-action-row {
@@ -136,10 +170,6 @@ APP_CSS = """
     font-size: 13px !important;
     line-height: 1.5 !important;
     background: #fbfcfd !important;
-}
-
-.caye-download {
-    min-height: 92px !important;
 }
 
 .caye-main-grid,
@@ -170,6 +200,12 @@ label span {
 
 
 def import_gradio():
+    warnings.filterwarnings(
+        "ignore",
+        message=r".*HTTP_422_UNPROCESSABLE_ENTITY.*HTTP_422_UNPROCESSABLE_CONTENT.*",
+        category=_starlette_deprecation_warning(),
+        module=r"gradio\.routes",
+    )
     try:
         import gradio as gr
     except ImportError as exc:
@@ -180,11 +216,45 @@ def import_gradio():
     return gr
 
 
+def _starlette_deprecation_warning() -> type[Warning]:
+    try:
+        from starlette.exceptions import StarletteDeprecationWarning
+    except Exception:
+        return Warning
+    return StarletteDeprecationWarning
+
+
 def supports_parameter(callable_obj, parameter_name: str) -> bool:
     try:
         return parameter_name in inspect.signature(callable_obj).parameters
     except (TypeError, ValueError):
         return False
+
+
+def find_available_port(host: str = "127.0.0.1", start_port: int = DEFAULT_WEB_PORT) -> int:
+    for port in range(start_port, start_port + WEB_PORT_SCAN_LIMIT + 1):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                probe.bind((host, port))
+            except OSError:
+                continue
+            return port
+    raise RuntimeError(
+        f"Cannot find an available local port from {start_port} "
+        f"to {start_port + WEB_PORT_SCAN_LIMIT}."
+    )
+
+
+def open_browser_later(url: str, delay_seconds: float = 1.0) -> None:
+    def _open() -> None:
+        time.sleep(delay_seconds)
+        try:
+            webbrowser.open(url, new=2)
+        except Exception:
+            pass
+
+    threading.Thread(target=_open, daemon=True).start()
 
 
 def build_options(
@@ -272,13 +342,23 @@ def render_dng_input(input_file):
 
 def cleanup_old_exports(now: float | None = None, temp_root: Path | None = None) -> None:
     cutoff = (time.time() if now is None else now) - EXPORT_RETENTION_SECONDS
-    temp_root = Path(tempfile.gettempdir()) if temp_root is None else temp_root
-    for export_dir in temp_root.glob("caye_export_*"):
+    temp_root = get_export_root() if temp_root is None else temp_root
+    for export_path in temp_root.glob("caye_export_*"):
         try:
-            if export_dir.is_dir() and export_dir.stat().st_mtime < cutoff:
-                shutil.rmtree(export_dir, ignore_errors=True)
+            if export_path.stat().st_mtime >= cutoff:
+                continue
+            if export_path.is_dir():
+                shutil.rmtree(export_path, ignore_errors=True)
+            elif export_path.is_file():
+                export_path.unlink(missing_ok=True)
         except OSError:
             continue
+
+
+def get_export_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / EXPORT_DIR_NAME
+    return Path.cwd() / EXPORT_DIR_NAME
 
 
 def run_preview(
@@ -372,16 +452,28 @@ def run_export(
         messages.append(f"[{stage}] {message}")
 
     cleanup_old_exports()
-    output_dir = Path(tempfile.mkdtemp(prefix="caye_export_"))
-    output_path = output_dir / "export.png"
+    export_root = get_export_root()
+    export_root.mkdir(parents=True, exist_ok=True)
+    output_path = export_root / f"caye_export_{int(time.time())}_{uuid.uuid4().hex[:8]}.png"
 
     try:
         process_image(input_path, output_path, options, reporter=reporter)
         status = "\n".join(messages)
         return str(output_path), status
     except Exception as exc:
-        shutil.rmtree(output_dir, ignore_errors=True)
+        try:
+            output_path.unlink(missing_ok=True)
+        except OSError:
+            pass
         return None, f"错误：{exc}"
+
+
+def run_export_download(*args):
+    output_path, status = run_export(*args)
+    if output_path is None:
+        gr = import_gradio()
+        raise gr.Error(status)
+    return output_path
 
 
 def create_ui() -> gr.Blocks:
@@ -451,15 +543,30 @@ def create_ui() -> gr.Blocks:
                 with gr.Group(elem_classes=["caye-panel"]):
                     gr.Markdown("### EXIF 信息")
                     with gr.Row(elem_classes=["caye-form-row"]):
-                        camera_model = gr.Textbox(label="相机型号", placeholder="例如：Canon EOS R5")
+                        camera_model = gr.Textbox(
+                            label="相机型号",
+                            value="沧野C3 Mark I",
+                            placeholder="例如：沧野C3 Mark I",
+                        )
                         lens_model = gr.Textbox(label="镜头型号", placeholder="例如：RF 50mm f/1.2L")
                     with gr.Row(elem_classes=["caye-form-row"]):
-                        focal_length_35mm = gr.Textbox(label="焦距", placeholder="例如：50mm")
-                        captured_at = gr.Textbox(label="拍摄日期", placeholder="例如：2024-06-15")
+                        focal_length_35mm = gr.Textbox(
+                            label="焦距",
+                            placeholder="例如：50mm",
+                            scale=1,
+                            min_width=140,
+                        )
+                        captured_at = gr.Textbox(
+                            label="拍摄日期",
+                            placeholder="例如：2024-06-15",
+                            scale=2,
+                            min_width=240,
+                            elem_classes=["caye-date-field"],
+                        )
                     with gr.Row(elem_classes=["caye-form-row"]):
                         aperture = gr.Textbox(label="光圈", placeholder="例如：2.8")
-                        shutter_speed = gr.Textbox(label="快门速度", placeholder="例如：1/125")
-                        iso = gr.Textbox(label="ISO", placeholder="例如：400")
+                        shutter_speed = gr.Textbox(label="快门速度", placeholder="例如：125、400、8000")
+                        iso = gr.Textbox(label="ASA", value="100", placeholder="例如：100")
 
                 with gr.Group(elem_classes=["caye-panel"]):
                     gr.Markdown("### 处理参数")
@@ -483,9 +590,19 @@ def create_ui() -> gr.Blocks:
                             label="水印不透明度",
                         )
                     no_watermark = gr.Checkbox(label="不添加水印", value=False)
+                    preview_inputs = [
+                        current_input, template, logo_choice, logo_upload, upscale_factor,
+                        restoration_profile, watermark_scale, opacity, no_watermark,
+                        camera_model, lens_model, focal_length_35mm,
+                        aperture, shutter_speed, iso, captured_at,
+                    ]
                     with gr.Row(elem_classes=["caye-action-row"]):
                         preview_btn = gr.Button("生成预览", variant="secondary")
-                        export_btn = gr.Button("导出 PNG", variant="primary")
+                        export_btn = gr.DownloadButton(
+                            label="导出 PNG",
+                            value=None,
+                            variant="primary",
+                        )
 
             with gr.Column(scale=4, min_width=360, elem_classes=["caye-stack"]):
                 with gr.Group(elem_classes=["caye-panel"]):
@@ -493,7 +610,7 @@ def create_ui() -> gr.Blocks:
                     preview_image = gr.Image(
                         label="处理预览",
                         type="pil",
-                        height=520,
+                        height=None,
                         elem_classes=["caye-output-preview"],
                     )
                 with gr.Group(elem_classes=["caye-panel"]):
@@ -502,11 +619,6 @@ def create_ui() -> gr.Blocks:
                         lines=8,
                         interactive=False,
                         elem_classes=["caye-status"],
-                    )
-                    export_file = gr.File(
-                        label="下载导出文件",
-                        visible=True,
-                        elem_classes=["caye-download"],
                     )
 
         def toggle_custom_logo(choice: str):
@@ -530,13 +642,6 @@ def create_ui() -> gr.Blocks:
             outputs=[current_input, input_render, status_text],
         )
 
-        preview_inputs = [
-            current_input, template, logo_choice, logo_upload, upscale_factor,
-            restoration_profile, watermark_scale, opacity, no_watermark,
-            camera_model, lens_model, focal_length_35mm,
-            aperture, shutter_speed, iso, captured_at,
-        ]
-
         preview_btn.click(
             fn=run_preview,
             inputs=preview_inputs,
@@ -544,9 +649,9 @@ def create_ui() -> gr.Blocks:
         )
 
         export_btn.click(
-            fn=run_export,
+            fn=run_export_download,
             inputs=preview_inputs,
-            outputs=[export_file, status_text],
+            outputs=[export_btn],
         )
 
     return app
@@ -555,11 +660,18 @@ def create_ui() -> gr.Blocks:
 def launch_app() -> None:
     gr = import_gradio()
     app = create_ui()
+    server_name = "127.0.0.1"
+    server_port = find_available_port(server_name)
+    url = f"http://{server_name}:{server_port}"
+    print(f"CAYE 水印工具正在启动：{url}", flush=True)
+    if os.environ.get("CAYE_WATERMARK_NO_BROWSER") != "1":
+        open_browser_later(url)
     launch_kwargs = {
-        "server_name": "127.0.0.1",
-        "server_port": None,
+        "server_name": server_name,
+        "server_port": server_port,
         "theme": gr.themes.Soft(),
-        "inbrowser": True,
+        "inbrowser": False,
+        "prevent_thread_lock": False,
     }
     if supports_parameter(app.launch, "css"):
         launch_kwargs["css"] = APP_CSS
