@@ -673,7 +673,7 @@ def build_options(
         resolved_logo = resolve_preset_logo(logo_choice)
     elif custom_logo_path:
         p = Path(custom_logo_path)
-        if p.exists():
+        if p.exists() and p.suffix.lower() in {".png", ".webp", ".jpg", ".jpeg"}:
             resolved_logo = p
     elif not no_watermark:
         resolved_logo = find_default_logo()
@@ -813,6 +813,8 @@ def run_preview(
             status = "\n".join(messages)
             return preview_img, status
     except Exception as exc:
+        import traceback
+        print(f"Preview error: {exc}\n{traceback.format_exc()}", file=sys.stderr)
         return None, f"错误：{exc}"
 
 
@@ -865,6 +867,8 @@ def run_export(
         status = "\n".join(messages)
         return str(output_path), status
     except Exception as exc:
+        import traceback
+        print(f"Export error: {exc}\n{traceback.format_exc()}", file=sys.stderr)
         try:
             output_path.unlink(missing_ok=True)
         except OSError:
@@ -1132,7 +1136,7 @@ def launch_app() -> None:
             text_size=gr.themes.sizes.text_md,
         ),
         "inbrowser": False,
-        "prevent_thread_lock": False,
+        "prevent_thread_lock": True,
     }
     if supports_parameter(app.launch, "css"):
         launch_kwargs["css"] = APP_CSS

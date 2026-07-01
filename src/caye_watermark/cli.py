@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from caye_watermark._logo import find_default_logo
 from caye_watermark.pipeline import (
     ManualExif,
     ProcessingOptions,
@@ -126,9 +125,9 @@ def build_output_path(
     return input_path.with_name(f"{input_path.stem}{suffix}").resolve()
 
 
-def find_default_logo(input_path: Path) -> Path | None:
-    from caye_watermark._logo import find_default_logo as _find
-    return _find(input_path)
+def _find_default_logo(input_path: Path) -> Path | None:
+    from caye_watermark._logo import find_default_logo
+    return find_default_logo(input_path)
 
 
 def validate_args(args: argparse.Namespace) -> argparse.Namespace:
@@ -154,7 +153,7 @@ def validate_args(args: argparse.Namespace) -> argparse.Namespace:
     if args.watermark_image is not None:
         args.watermark_image = args.watermark_image.expanduser().resolve()
     elif not args.no_watermark:
-        args.watermark_image = find_default_logo(args.input_file)
+        args.watermark_image = _find_default_logo(args.input_file)
 
     if not args.no_watermark and args.watermark_image is None:
         raise SystemExit(

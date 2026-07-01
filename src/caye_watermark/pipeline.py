@@ -816,6 +816,7 @@ def load_image(path: Path, settings: RestorationSettings) -> np.ndarray:
             noise_thr=settings.noise_thr,
             output_bps=16,
         )
+    # CAYE cameras produce horizontally mirrored RAW data; flip to correct orientation.
     mirrored = np.flip(rgb, axis=1).astype(np.float32)
     return mirrored * (WORKING_WHITE_LEVEL / RAW_WHITE_LEVEL)
 
@@ -948,10 +949,15 @@ def fit_array_within(array: np.ndarray, max_size: int) -> np.ndarray:
 def median_filter_rgb(array: np.ndarray, size: int) -> np.ndarray:
     if size < 3 or size % 2 == 0:
         return array
-    pad = size // 2
-    padded = np.pad(array, ((pad, pad), (pad, pad), (0, 0)), mode="edge")
-    windows = np.lib.stride_tricks.sliding_window_view(padded, (size, size), axis=(0, 1))
-    return np.median(windows, axis=(2, 3)).astype(np.float32)
+    try:
+        from scipy.ndimage import median_filter
+        return median_filter(array, size=(size, size, 1), mode="edge").astype(np.float32)
+    except ImportError:
+        # Fallback: per-channel sliding window (less memory-efficient)
+        pad = size // 2
+        padded = np.pad(array, ((pad, pad), (pad, pad), (0, 0)), mode="edge")
+        windows = np.lib.stride_tricks.sliding_window_view(padded, (size, size), axis=(0, 1))
+        return np.median(windows, axis=(2, 3)).astype(np.float32)
 
 
 def gaussian_kernel1d(radius: float) -> np.ndarray:
