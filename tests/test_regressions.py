@@ -6,9 +6,11 @@ from unittest.mock import patch
 
 import numpy as np
 
-from caye_watermark._logo import find_default_logo
+from caye_watermark._logo import LOGO_CHOICES, find_default_logo, resolve_preset_logo
 from caye_watermark.cli import build_output_path, validate_args
 from caye_watermark.pipeline import (
+    DEFAULT_FONT_CANDIDATES,
+    FONT_SEARCH_DIRS,
     EdgeCropAnalysis,
     ManualExif,
     ProcessingOptions,
@@ -19,7 +21,13 @@ from caye_watermark.pipeline import (
     parse_color,
     repair_abnormal_edges,
 )
-from caye_watermark.webui import _validate_dng_file, _validate_options
+from caye_watermark.webui import (
+    _validate_dng_file,
+    _validate_options,
+    build_options,
+    cleanup_old_exports,
+    render_dng_input,
+)
 
 
 class CliRegressionTests(unittest.TestCase):
@@ -112,6 +120,19 @@ class CliValidationTests(unittest.TestCase):
 
 
 class LogoTests(unittest.TestCase):
+    def test_logo_choices_include_presets_then_custom(self) -> None:
+        self.assertEqual(
+            LOGO_CHOICES,
+            ("CAYE.webp", "HACHIMITSU.png", "LaiyeRed.png", "LaiyeWhite.png", "自选"),
+        )
+
+    def test_resolve_preset_logo_finds_brand_file(self) -> None:
+        with patch("caye_watermark._logo.Path.cwd") as mock_cwd:
+            mock_cwd.return_value = Path(__file__).resolve().parents[1]
+            result = resolve_preset_logo("HACHIMITSU.png")
+            self.assertIsNotNone(result)
+            self.assertEqual(result.name, "HACHIMITSU.png")
+
     def test_find_default_logo_returns_none_when_no_files_exist(self) -> None:
         with patch("caye_watermark._logo.Path.cwd") as mock_cwd:
             mock_cwd.return_value = Path("/nonexistent_dir")
@@ -206,6 +227,64 @@ class ParseColorTests(unittest.TestCase):
 
 
 class WebUiValidationTests(unittest.TestCase):
+    def test_windows_font_candidates_are_configured(self) -> None:
+        font_paths = {str(path) for path in FONT_SEARCH_DIRS}
+        self.assertIn("C:\\Windows\\Fonts", {path.replace("/", "\\") for path in font_paths})
+        candidates = {path.replace("/", "\\").lower() for path in DEFAULT_FONT_CANDIDATES}
+        self.assertIn("c:\\windows\\fonts\\msyh.ttc", candidates)
+
+    def test_build_options_uses_selected_preset_logo(self) -> None:
+        options = build_options(
+            "standard-footer",
+            "LaiyeRed.png",
+            None,
+            4,
+            "balanced",
+            0.22,
+            235,
+            False,
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+        )
+        self.assertIsNotNone(options.watermark_image)
+        self.assertEqual(options.watermark_image.name, "LaiyeRed.png")
+
+    def test_build_options_uses_custom_logo_when_selected(self) -> None:
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            tmp = Path(f.name)
+        try:
+            options = build_options(
+                "standard-footer",
+                "自选",
+                str(tmp),
+                4,
+                "balanced",
+                0.22,
+                235,
+                False,
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+            )
+            self.assertEqual(options.watermark_image, tmp)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    def test_validate_dng_file_accepts_existing_dng(self) -> None:
+        input_file = Path(__file__).resolve().parents[1] / "Example" / "Raw" / "CDI_12.DNG"
+        result = _validate_dng_file(str(input_file))
+        self.assertEqual(result, input_file)
+
     def test_validate_dng_file_rejects_non_dng(self) -> None:
         import tempfile
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
@@ -213,9 +292,61 @@ class WebUiValidationTests(unittest.TestCase):
         try:
             result = _validate_dng_file(str(tmp))
             self.assertIsInstance(result, str)
-            self.assertIn("Only .DNG", result)
+            self.assertIn("仅支持 .DNG", result)
         finally:
             tmp.unlink(missing_ok=True)
+
+    def test_render_dng_input_reports_invalid_file(self) -> None:
+        selected, image, status = render_dng_input(None)
+        self.assertIsNone(selected)
+        self.assertIsNone(image)
+        self.assertIn("选择一个 DNG", status)
+
+    def test_render_dng_input_clears_selection_when_decode_fails(self) -> None:
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".DNG", delete=False) as f:
+            f.write(b"not a real dng")
+            tmp = Path(f.name)
+        try:
+            selected, image, status = render_dng_input(str(tmp))
+            self.assertIsNone(selected)
+            self.assertIsNone(image)
+            self.assertIn("预览读取失败", status)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    def test_cleanup_old_exports_removes_expired_export_dirs(self) -> None:
+        class FakeExportDir:
+            def __init__(self, name: str, mtime: float, is_directory: bool = True) -> None:
+                self.name = name
+                self.mtime = mtime
+                self.is_directory = is_directory
+
+            def is_dir(self) -> bool:
+                return self.is_directory
+
+            def stat(self):
+                return type("Stat", (), {"st_mtime": self.mtime})()
+
+        class FakeTempRoot:
+            def __init__(self, entries: list[FakeExportDir]) -> None:
+                self.entries = entries
+                self.pattern = ""
+
+            def glob(self, pattern: str):
+                self.pattern = pattern
+                return iter(self.entries)
+
+        old_dir = FakeExportDir("caye_export_old", 1000.0)
+        keep_dir = FakeExportDir("caye_export_keep", 1000.0 + (24 * 60 * 60))
+        non_dir = FakeExportDir("caye_export_file", 1000.0, is_directory=False)
+        root = FakeTempRoot([old_dir, keep_dir, non_dir])
+
+        with patch("caye_watermark.webui.shutil.rmtree") as mock_rmtree:
+            cleanup_old_exports(now=1000.0 + (25 * 60 * 60), temp_root=root)
+
+        self.assertEqual(root.pattern, "caye_export_*")
+        mock_rmtree.assert_called_once_with(old_dir, ignore_errors=True)
 
     def test_validate_options_rejects_invalid_scale(self) -> None:
         options = ProcessingOptions(
@@ -224,7 +355,7 @@ class WebUiValidationTests(unittest.TestCase):
         )
         result = _validate_options(options)
         self.assertIsInstance(result, str)
-        self.assertIn("Watermark scale", result)
+        self.assertIn("水印尺寸", result)
 
     def test_validate_options_rejects_invalid_opacity(self) -> None:
         options = ProcessingOptions(
@@ -233,7 +364,7 @@ class WebUiValidationTests(unittest.TestCase):
         )
         result = _validate_options(options)
         self.assertIsInstance(result, str)
-        self.assertIn("opacity", result)
+        self.assertIn("不透明度", result)
 
 
 if __name__ == "__main__":

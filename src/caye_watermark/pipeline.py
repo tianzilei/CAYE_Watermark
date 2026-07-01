@@ -80,6 +80,7 @@ FONT_HEIGHT_SCALE = 1.35
 FONT_SIZE_MIN = 8
 
 FONT_SEARCH_DIRS = (
+    Path("C:/Windows/Fonts"),
     Path("/System/Library/Fonts"),
     Path("/System/Library/Fonts/Supplemental"),
     Path("/Library/Fonts"),
@@ -88,6 +89,9 @@ FONT_SEARCH_DIRS = (
 )
 
 DEFAULT_FONT_CANDIDATES = (
+    "C:/Windows/Fonts/msyh.ttc",
+    "C:/Windows/Fonts/simhei.ttf",
+    "C:/Windows/Fonts/arial.ttf",
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
     "/System/Library/Fonts/Supplemental/Arial.ttf",
     "/System/Library/Fonts/Helvetica.ttc",
@@ -95,6 +99,9 @@ DEFAULT_FONT_CANDIDATES = (
 )
 
 BOLD_FONT_CANDIDATES = (
+    "C:/Windows/Fonts/msyhbd.ttc",
+    "C:/Windows/Fonts/simhei.ttf",
+    "C:/Windows/Fonts/arialbd.ttf",
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
     "/System/Library/Fonts/Supplemental/Helvetica Bold.ttf",
     "/System/Library/Fonts/Helvetica.ttc",

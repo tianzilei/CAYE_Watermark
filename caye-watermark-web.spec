@@ -9,6 +9,7 @@ Or use the Makefile:
 """
 import os
 import sys
+import importlib.util
 from pathlib import Path
 
 block_cipher = None
@@ -34,26 +35,40 @@ if os.path.isdir(dylibs_dir):
 # Gradio needs its templates, themes, and data files bundled
 import gradio
 gradio_dir = os.path.dirname(gradio.__file__)
-import safehttpx
-safehttpx_dir = os.path.dirname(safehttpx.__file__)
-import gradio_client
-gradio_client_dir = os.path.dirname(gradio_client.__file__)
-import groovy
-groovy_dir = os.path.dirname(groovy.__file__)
+
+
+def package_dir(package_name):
+    spec = importlib.util.find_spec(package_name)
+    if spec is None or spec.origin is None:
+        return None
+    return os.path.dirname(spec.origin)
 
 datas = []
-for src, dest in [
+brands_dir = os.path.join(ROOT, 'Example', 'Brands')
+if os.path.isdir(brands_dir):
+    datas.append((brands_dir, os.path.join('Example', 'Brands')))
+
+data_candidates = [
     (os.path.join(gradio_dir, 'templates'), 'gradio/templates'),
     (os.path.join(gradio_dir, 'icons'), 'gradio/icons'),
     (os.path.join(gradio_dir, 'themes'), 'gradio/themes'),
     (os.path.join(gradio_dir, 'media_assets'), 'gradio/media_assets'),
     (os.path.join(gradio_dir, 'hash_seed.txt'), 'gradio'),
     (os.path.join(gradio_dir, 'package.json'), 'gradio'),
-    (os.path.join(safehttpx_dir, 'version.txt'), 'safehttpx'),
-    (os.path.join(groovy_dir, 'version.txt'), 'groovy'),
-    (os.path.join(gradio_client_dir, 'types.json'), 'gradio_client'),
-    (os.path.join(gradio_client_dir, 'package.json'), 'gradio_client'),
-]:
+]
+
+for package_name, files in {
+    'safehttpx': [('version.txt', 'safehttpx')],
+    'groovy': [('version.txt', 'groovy')],
+    'gradio_client': [('types.json', 'gradio_client'), ('package.json', 'gradio_client')],
+}.items():
+    directory = package_dir(package_name)
+    if directory is None:
+        continue
+    for filename, dest in files:
+        data_candidates.append((os.path.join(directory, filename), dest))
+
+for src, dest in data_candidates:
     if os.path.exists(src):
         datas.append((src, dest))
 
