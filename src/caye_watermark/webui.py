@@ -1137,6 +1137,7 @@ def launch_app() -> None:
         ),
         "inbrowser": False,
         "prevent_thread_lock": True,
+        "allowed_paths": [str(get_export_root())],
     }
     if supports_parameter(app.launch, "css"):
         launch_kwargs["css"] = APP_CSS
